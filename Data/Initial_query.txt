@@ -1,0 +1,43 @@
+with mb as 
+(select customer_id, right(new_mobile_number, 10) mobile from `risk_credit_mis.customer_contact_details`
+union all 
+select customer_id, right(old_mobile_number, 10) mobile from `risk_credit_mis.customer_contact_details` where old_mobile_number is not null
+),
+mb1 
+as
+(select distinct customer_id, mobile from mb),
+mb2
+as
+(select *, row_number() over(partition by customer_id order by customer_id) custrank from mb1),
+delqb as
+(
+Select lmt.customerId,lmt.loanAccountNumber,lmt.disbursedLoanAmount, lmt.disbursementDateTime, lmt.firstDueDate, lmt.monthlyIncome ,lmt.age
+, lmt.gender, lmt.maritalStatus,
+case when a1.obs_min_inst_def30 >= 3 then lmt.customerId end obsfstpd30 
+, case when a1.min_inst_def30 in (1,2,3) then lmt.customerId end fstpd30dev
+from prj-prod-dataplatform.risk_credit_mis.loan_deliquency_data a1
+left join `risk_credit_mis.loan_master_table` lmt on lmt.loanAccountNumber = a1.loanAccountNumber
+),delqb1 
+as
+(select customerId,loanAccountNumber, disbursedLoanAmount,disbursementDateTime,firstDueDate,monthlyIncome,age, gender, maritalStatus, 
+count(distinct case when obsfstpd30 is not null and fstpd30dev is not null then loanAccountNumber end) fstpd30def,
+count(distinct case when obsfstpd30 is not null then loanAccountNumber  end) obsfpd30,
+ROW_NUMBER() OVER (PARTITION BY customerId ORDER BY disbursementDateTime DESC) AS rnk
+from delqb where obsfstpd30 is not null
+group by 1,2,3,4,5,6,7,8,9
+), stv as
+(select l.*, p.long_name,p.category ,sv2.latitude as store_lat, sv2.longitude  as strore_long from `prj-prod-dataplatform.manual_source_extracts.partner_711_loyalty_transaction_backtest_20240123`  l
+left join
+`prj-prod-dataplatform.manual_source_extracts.partner_711_dim_product` p on cast(l.product_id as string) = cast(p.product_id as string)
+left join
+`prj-prod-dataplatform.manual_source_extracts.partner_711_dim_store_v2`  sv2 
+on cast(sv2.store_id as string) = cast(l.store_id as string)
+),
+base as
+(select * from 
+stv
+left join mb2 on cast(mb2.mobile as numeric) = cast(stv.lp_id as numeric)
+-- left join delqb1 on delqb1.customerId = cast(mb2.customer_id as numeric)
+LEFT JOIN (SELECT * FROM delqb1 WHERE rnk = 1) delqb1 ON delqb1.customerId = CAST(mb2.customer_id AS NUMERIC)
+)
+select * from base;
